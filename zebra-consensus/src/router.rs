@@ -143,6 +143,18 @@ impl RouterError {
         }
     }
 
+    /// Returns `true` if a transparent input spent by this block could not be
+    /// found in the best chain or the mempool.
+    ///
+    /// Only the full block verifier looks up spent outputs, so checkpoint
+    /// verification never produces this error.
+    pub fn is_transparent_input_not_found(&self) -> bool {
+        match self {
+            RouterError::Checkpoint { .. } => false,
+            RouterError::Block { source, .. } => source.is_transparent_input_not_found(),
+        }
+    }
+
     /// Returns a suggested misbehaviour score increment for a certain error.
     pub fn misbehavior_score(&self) -> u32 {
         // TODO: Adjust these values based on zcashd (#9258).

@@ -12,7 +12,9 @@ use zebra_chain::{
     chain_tip::mock::{MockChainTip, MockChainTipSender},
     serialization::ZcashDeserializeInto,
 };
-use zebra_consensus::{Config as ConsensusConfig, RouterError, VerifyBlockError};
+use zebra_consensus::{
+    error::TransactionError, Config as ConsensusConfig, RouterError, VerifyBlockError,
+};
 use zebra_network::{InventoryResponse, PeerSocketAddr};
 use zebra_state::Config as StateConfig;
 use zebra_test::mock_service::{MockService, PanicAssertion};
@@ -1119,6 +1121,104 @@ async fn invalid_height_does_not_restart_sync() {
     assert!(
         has_addr,
         "InvalidHeight should carry advertiser_addr for peer scoring"
+    );
+}
+
+/// Builds the error the verifier produces when a block spends an output that is
+/// not committed to the state yet, as observed on Mainnet at heights 3,427,629
+/// and 3,427,920.
+fn transparent_input_not_found_error() -> BlockDownloadVerifyError {
+    BlockDownloadVerifyError::Invalid {
+        error: RouterError::Block {
+            source: Box::new(VerifyBlockError::Transaction(
+                TransactionError::TransparentInputNotFound,
+            )),
+        },
+        height: block::Height(3_427_629),
+        hash: block::Hash::from([0x11; 32]),
+        advertiser_addr: None,
+    }
+}
+
+/// A near-tip `AwaitUtxo` timeout must not restart the sync.
+///
+/// Restarting re-downloads the same range, hits the same not-yet-committed
+/// parent, and times out again, pinning the node just below the tip.
+#[tokio::test]
+async fn transparent_input_not_found_does_not_restart_sync() {
+    let err = transparent_input_not_found_error();
+
+    let restart = ChainSync::<
+        MockService<zn::Request, zn::Response, PanicAssertion>,
+        MockService<zs::Request, zs::Response, PanicAssertion>,
+        MockService<zebra_consensus::Request, block::Hash, PanicAssertion>,
+        MockChainTip,
+    >::should_restart_sync(&err);
+
+    assert!(
+        !restart,
+        "a transient TransparentInputNotFound should NOT trigger a sync restart"
+    );
+}
+
+/// The same error must be classified by type, not by a substring of its debug
+/// output.
+///
+/// `TransparentInputNotFound` contains the substring `NotFound`, so before the
+/// typed arm existed this error fell through to the catch-all, which logs it as
+/// a suspected downcast bug. The catch-all is also the only arm that returns
+/// `true`, so `should_restart_sync` returning `false` proves the error no longer
+/// reaches it — and therefore that the spurious log is gone.
+#[tokio::test]
+async fn transparent_input_not_found_is_matched_by_type_not_substring() {
+    let err = transparent_input_not_found_error();
+
+    assert!(
+        format!("{err:?}").contains("NotFound"),
+        "this error's debug output must still contain the substring that the \
+         catch-all matches on, otherwise this test no longer covers the false positive"
+    );
+
+    let restart = ChainSync::<
+        MockService<zn::Request, zn::Response, PanicAssertion>,
+        MockService<zs::Request, zs::Response, PanicAssertion>,
+        MockService<zebra_consensus::Request, block::Hash, PanicAssertion>,
+        MockChainTip,
+    >::should_restart_sync(&err);
+
+    assert!(
+        !restart,
+        "the error must be caught by the typed arm before reaching the catch-all \
+         that logs it as a suspected programming error"
+    );
+}
+
+/// Genuine consensus failures must still restart the sync.
+///
+/// Guards against the typed arm being widened to all transaction errors.
+#[tokio::test]
+async fn other_transaction_errors_still_restart_sync() {
+    let err = BlockDownloadVerifyError::Invalid {
+        error: RouterError::Block {
+            source: Box::new(VerifyBlockError::Transaction(
+                TransactionError::WrongVersion,
+            )),
+        },
+        height: block::Height(3_427_629),
+        hash: block::Hash::from([0x22; 32]),
+        advertiser_addr: None,
+    };
+
+    let restart = ChainSync::<
+        MockService<zn::Request, zn::Response, PanicAssertion>,
+        MockService<zs::Request, zs::Response, PanicAssertion>,
+        MockService<zebra_consensus::Request, block::Hash, PanicAssertion>,
+        MockChainTip,
+    >::should_restart_sync(&err);
+
+    assert!(
+        restart,
+        "a genuine consensus failure must still trigger a sync restart"
     );
 }
 

@@ -106,6 +106,21 @@ impl VerifyBlockError {
         }
     }
 
+    /// Returns `true` if a transparent input spent by this block could not be
+    /// found in the best chain or the mempool.
+    ///
+    /// Near the chain tip this is usually transient: the spent output belongs to
+    /// a block that has not been committed to the state yet, so the verifier's
+    /// `AwaitUtxo` lookup times out. It can also mean the block genuinely spends
+    /// a nonexistent output, so callers must not treat it as unconditionally
+    /// transient.
+    pub fn is_transparent_input_not_found(&self) -> bool {
+        matches!(
+            self,
+            VerifyBlockError::Transaction(TransactionError::TransparentInputNotFound)
+        )
+    }
+
     /// Returns a suggested misbehaviour score increment for a certain error.
     pub fn misbehavior_score(&self) -> u32 {
         use VerifyBlockError::*;

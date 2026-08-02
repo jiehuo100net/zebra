@@ -1303,6 +1303,27 @@ where
                 false
             }
 
+            BlockDownloadVerifyError::Invalid { error, .. }
+                if error.is_transparent_input_not_found() =>
+            {
+                // Near the tip, a block can spend an output from a block that is not committed
+                // to the state yet. The verifier's `AwaitUtxo` lookup then times out and is
+                // classified as `TransparentInputNotFound`. Restarting the sync re-downloads the
+                // same range, hits the same not-yet-committed parent, and times out again, which
+                // pins the node just below the tip.
+                //
+                // This is a type check, not a substring match on the debug output: because
+                // `TransparentInputNotFound` contains the substring "NotFound", it previously
+                // reached the catch-all below and was logged there as a suspected downcast bug.
+                //
+                // TODO: `TransparentInputNotFound` is ambiguous — it also covers a block that
+                //       genuinely spends a nonexistent output. Distinguish a lookup timeout from
+                //       a genuine miss in the error type (#2908), or restart after a certain
+                //       number of consecutive occurrences.
+                debug!(error = ?e, "block spends an output that is not in the state yet, dropping the block and continuing");
+                false
+            }
+
             // Structural matches: direct
             BlockDownloadVerifyError::CancelledDuringDownload { .. }
             | BlockDownloadVerifyError::CancelledDuringVerification { .. } => {

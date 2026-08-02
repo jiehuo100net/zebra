@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `VerifyBlockError::is_transparent_input_not_found()` and
+  `RouterError::is_transparent_input_not_found()`, so callers can recognise a block that spends a
+  transparent output which is not in the best chain or the mempool without matching on the
+  error's debug output. Near the chain tip this is usually transient, but it also covers a block
+  that genuinely spends a nonexistent output, so it must not be treated as unconditionally
+  transient ([#11168](https://github.com/ZcashFoundation/zebra/issues/11168)).
+
 ## [14.0.1] - 2026-07-27
 
 ### Changed

@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 - Reject blocks whose total chain value pool balance would exceed `MAX_MONEY`,
   enforcing the cap on the total monetary base
   ([#10817](https://github.com/ZcashFoundation/zebra/pull/10817))
+- A block near the chain tip that spends an output from a block which is not committed to the
+  state yet no longer restarts the whole sync. The verifier's lookup times out and is reported as
+  a missing transparent input, which the syncer treated as a consensus-invalid block: each
+  restart re-downloaded the same range, hit the same not-yet-committed parent, and restarted
+  again, pinning the node just below the tip. The same error was also logged as a suspected
+  internal bug, because the check that was meant to catch downcast errors matched on the text of
+  the error rather than its type
+  ([#11168](https://github.com/ZcashFoundation/zebra/issues/11168),
+  [#11132](https://github.com/ZcashFoundation/zebra/issues/11132))
 
 ### Security
 

@@ -1,0 +1,4 @@
+project: zebra-state
+kind: Fixed
+body: 'A block in a network upgrade with no consensus branch ID now fails to commit with `ValidateContextError::HistoryTreeError` instead of crashing the node ([#PRNUM](https://github.com/ZcashFoundation/zebra/pull/PRNUM)).'
+time: 2026-09-23T06:00:02.000000000Z

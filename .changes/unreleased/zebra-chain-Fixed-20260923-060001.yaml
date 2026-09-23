@@ -1,0 +1,4 @@
+project: zebra-chain
+kind: Fixed
+body: 'Chain history tree operations return `HistoryTreeError::MissingBranchId` instead of panicking when a block is in a network upgrade with no consensus branch ID, such as NU7 on a configured Testnet or Regtest in a production build ([#PRNUM](https://github.com/ZcashFoundation/zebra/pull/PRNUM)).'
+time: 2026-09-23T06:00:01.000000000Z

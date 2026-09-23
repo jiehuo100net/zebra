@@ -3,7 +3,7 @@ use crate::{
     serialization::ZcashDeserializeInto,
 };
 
-use crate::primitives::zcash_history::*;
+use crate::{history_tree::HistoryTreeError, primitives::zcash_history::*};
 use color_eyre::eyre;
 use eyre::Result;
 
@@ -92,6 +92,59 @@ fn tree_for_network_upgrade(network: &Network, network_upgrade: NetworkUpgrade) 
     assert_eq!(tree.inner.len(), 3);
     // Two nodes were appended: the new leaf and the parent node
     assert_eq!(append.len(), 2);
+
+    Ok(())
+}
+
+/// A network upgrade without a consensus branch ID must make the MMR tree constructors return
+/// [`HistoryTreeError::MissingBranchId`] instead of panicking.
+///
+/// In production builds this is what happens to a configured network that activates an upgrade
+/// whose branch ID is only compiled into test builds (such as NU7), so the test uses upgrades that
+/// have no branch ID in any build.
+#[test]
+fn tree_constructors_reject_missing_branch_id() -> Result<()> {
+    let _init_guard = zebra_test::init();
+
+    for network in Network::iter() {
+        for network_upgrade in [NetworkUpgrade::Genesis, NetworkUpgrade::BeforeOverwinter] {
+            assert_eq!(network_upgrade.branch_id(), None);
+
+            let error = Tree::<V1>::new_from_cache(
+                &network,
+                network_upgrade,
+                1,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .expect_err("an upgrade without a branch ID must not build a tree");
+            assert_eq!(error, HistoryTreeError::MissingBranchId(network_upgrade));
+        }
+    }
+
+    // The genesis block is in the `Genesis` network upgrade, which has no branch ID.
+    let network = Network::Mainnet;
+    let genesis_block = Arc::new(
+        zebra_test::vectors::BLOCK_MAINNET_GENESIS_BYTES.zcash_deserialize_into::<Block>()?,
+    );
+    let roots = BlockCommitmentTreeRoots {
+        sapling: &Default::default(),
+        orchard: &Default::default(),
+        ironwood: &Default::default(),
+    };
+    let expected = HistoryTreeError::MissingBranchId(NetworkUpgrade::Genesis);
+
+    let error = Tree::<V1>::new_from_block(&network, genesis_block.clone(), roots)
+        .expect_err("an upgrade without a branch ID must not build a V1 leaf");
+    assert_eq!(error, expected);
+
+    let error = Tree::<V2>::new_from_block(&network, genesis_block.clone(), roots)
+        .expect_err("an upgrade without a branch ID must not build a V2 leaf");
+    assert_eq!(error, expected);
+
+    let error = Tree::<V3>::new_from_block(&network, genesis_block, roots)
+        .expect_err("an upgrade without a branch ID must not build a V3 leaf");
+    assert_eq!(error, expected);
 
     Ok(())
 }

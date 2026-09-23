@@ -33,6 +33,11 @@ pub enum HistoryTreeError {
 
     #[error("I/O error: {0}")]
     IOError(#[from] io::Error),
+
+    /// The network upgrade has an activation height on this network, but no consensus branch ID
+    /// in this build, so its chain history tree nodes cannot be created or decoded.
+    #[error("network upgrade {0:?} has no consensus branch ID, so it has no chain history tree")]
+    MissingBranchId(NetworkUpgrade),
 }
 
 impl PartialEq for HistoryTreeError {
@@ -247,15 +252,9 @@ impl NonEmptyHistoryTree {
         }
 
         let new_entries = match &mut self.inner {
-            InnerHistoryTree::PreOrchard(tree) => tree
-                .append_leaf(block, roots)
-                .map_err(|e| HistoryTreeError::InnerError { inner: e })?,
-            InnerHistoryTree::OrchardOnward(tree) => tree
-                .append_leaf(block, roots)
-                .map_err(|e| HistoryTreeError::InnerError { inner: e })?,
-            InnerHistoryTree::IronwoodOnward(tree) => tree
-                .append_leaf(block, roots)
-                .map_err(|e| HistoryTreeError::InnerError { inner: e })?,
+            InnerHistoryTree::PreOrchard(tree) => tree.append_leaf(block, roots)?,
+            InnerHistoryTree::OrchardOnward(tree) => tree.append_leaf(block, roots)?,
+            InnerHistoryTree::IronwoodOnward(tree) => tree.append_leaf(block, roots)?,
         };
         for entry in new_entries {
             // Not every entry is a peak; those will be trimmed later
@@ -279,7 +278,7 @@ impl NonEmptyHistoryTree {
     }
 
     /// Prune tree, removing all non-peak entries.
-    fn prune(&mut self) -> Result<(), io::Error> {
+    fn prune(&mut self) -> Result<(), HistoryTreeError> {
         // Go through all the peaks of the tree.
         // This code is based on a librustzcash example:
         // https://github.com/zcash/librustzcash/blob/02052526925fba9389f1428d6df254d4dec967e6/zcash_history/examples/long.rs
@@ -360,7 +359,7 @@ impl NonEmptyHistoryTree {
     ///
     /// Shared by [`Self::prune`] and the [`Clone`] impl, which reconstruct the inner tree
     /// identically and differ only in how they handle the (practically impossible) rebuild error.
-    fn rebuilt_inner(&self) -> Result<InnerHistoryTree, io::Error> {
+    fn rebuilt_inner(&self) -> Result<InnerHistoryTree, HistoryTreeError> {
         Ok(match &self.inner {
             InnerHistoryTree::PreOrchard(_) => {
                 InnerHistoryTree::PreOrchard(Tree::<PreOrchard>::new_from_cache(

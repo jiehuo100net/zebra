@@ -1,0 +1,4 @@
+project: zebra-chain
+kind: breaking
+body: '`primitives::zcash_history::Tree::{new_from_cache, new_from_block, append_leaf}` and `primitives::zcash_history::Version::block_to_history_node` now return `history_tree::HistoryTreeError`, which gains a `MissingBranchId` variant for a network upgrade that has an activation height but no consensus branch ID ([#PRNUM](https://github.com/ZcashFoundation/zebra/pull/PRNUM)).'
+time: 2026-09-23T06:00:00.000000000Z

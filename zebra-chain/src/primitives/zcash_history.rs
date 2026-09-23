@@ -6,13 +6,14 @@
 
 mod tests;
 
-use std::{collections::BTreeMap, io, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use serde_big_array::BigArray;
 pub use zcash_history::{V1, V2, V3};
 
 use crate::{
     block::{Block, ChainHistoryMmrRootHash},
+    history_tree::HistoryTreeError,
     orchard,
     parameters::{Network, NetworkUpgrade},
     sapling,
@@ -38,11 +39,14 @@ pub trait Version: zcash_history::Version {
     /// Convert a Block into the NodeData for this version.
     ///
     /// The Ironwood root in `roots` is ignored by all versions before V3 (NU6.3).
+    ///
+    /// Returns [`HistoryTreeError::MissingBranchId`] if the block's network upgrade has no
+    /// consensus branch ID.
     fn block_to_history_node(
         block: Arc<Block>,
         network: &Network,
         roots: BlockCommitmentTreeRoots,
-    ) -> Self::NodeData;
+    ) -> Result<Self::NodeData, HistoryTreeError>;
 }
 
 /// A MMR Tree using zcash_history::Tree.
@@ -101,12 +105,13 @@ impl Entry {
 
     /// Create a leaf Entry for the given block, its network, and the roots of its
     /// note commitment trees.
+    #[allow(clippy::unwrap_in_result)]
     fn new_leaf<V: Version>(
         block: Arc<Block>,
         network: &Network,
         roots: BlockCommitmentTreeRoots,
-    ) -> Self {
-        let node_data = V::block_to_history_node(block, network, roots);
+    ) -> Result<Self, HistoryTreeError> {
+        let node_data = V::block_to_history_node(block, network, roots)?;
         let inner_entry = zcash_history::Entry::<V>::new_leaf(node_data);
         let mut entry = Entry {
             inner: [0; zcash_history::MAX_ENTRY_SIZE],
@@ -114,7 +119,7 @@ impl Entry {
         inner_entry
             .write(&mut &mut entry.inner[..])
             .expect("buffer has the proper size");
-        entry
+        Ok(entry)
     }
 }
 
@@ -128,20 +133,22 @@ impl<V: Version> Tree<V> {
     /// Note that the length is usually larger than the length of `peaks` and `extra`, since
     /// you don't need to pass every node, just the peaks of the tree (plus extra).
     ///
+    /// Returns [`HistoryTreeError::MissingBranchId`] if `network_upgrade` has no consensus
+    /// branch ID.
+    ///
     /// # Panics
     ///
     /// Will panic if `peaks` is empty.
-    #[allow(clippy::unwrap_in_result)]
     pub fn new_from_cache(
         network: &Network,
         network_upgrade: NetworkUpgrade,
         length: u32,
         peaks: &BTreeMap<u32, Entry>,
         extra: &BTreeMap<u32, Entry>,
-    ) -> Result<Self, io::Error> {
+    ) -> Result<Self, HistoryTreeError> {
         let branch_id = network_upgrade
             .branch_id()
-            .expect("unexpected pre-Overwinter MMR history tree");
+            .ok_or(HistoryTreeError::MissingBranchId(network_upgrade))?;
         let mut peaks_vec = Vec::new();
         for (idx, entry) in peaks {
             let inner_entry = zcash_history::Entry::from_bytes(branch_id.into(), entry.inner)?;
@@ -163,17 +170,20 @@ impl<V: Version> Tree<V> {
     /// Create a single-node MMR tree for the given block.
     ///
     /// The Ironwood root in `roots` is ignored for V1/V2 trees.
+    ///
+    /// Returns [`HistoryTreeError::MissingBranchId`] if the block's network upgrade has no
+    /// consensus branch ID.
     #[allow(clippy::unwrap_in_result)]
     pub fn new_from_block(
         network: &Network,
         block: Arc<Block>,
         roots: BlockCommitmentTreeRoots,
-    ) -> Result<(Self, Entry), io::Error> {
+    ) -> Result<(Self, Entry), HistoryTreeError> {
         let height = block
             .coinbase_height()
             .expect("block must have coinbase height during contextual verification");
         let network_upgrade = NetworkUpgrade::current(network, height);
-        let entry0 = Entry::new_leaf::<V>(block, network, roots);
+        let entry0 = Entry::new_leaf::<V>(block, network, roots)?;
         let mut peaks = BTreeMap::new();
         peaks.insert(0u32, entry0);
         Ok((
@@ -188,7 +198,9 @@ impl<V: Version> Tree<V> {
     ///
     /// The Ironwood root in `roots` is ignored for V1/V2 trees.
     ///
-    /// Returns a vector of nodes added to the tree (leaf + internal nodes).
+    /// Returns a vector of nodes added to the tree (leaf + internal nodes), or
+    /// [`HistoryTreeError::MissingBranchId`] if the block's network upgrade has no consensus
+    /// branch ID.
     ///
     /// # Panics
     ///
@@ -199,7 +211,7 @@ impl<V: Version> Tree<V> {
         &mut self,
         block: Arc<Block>,
         roots: BlockCommitmentTreeRoots,
-    ) -> Result<Vec<Entry>, zcash_history::Error> {
+    ) -> Result<Vec<Entry>, HistoryTreeError> {
         let height = block
             .coinbase_height()
             .expect("block must have coinbase height during contextual verification");
@@ -212,8 +224,11 @@ impl<V: Version> Tree<V> {
             self.network_upgrade
         );
 
-        let node_data = V::block_to_history_node(block, &self.network, roots);
-        let appended = self.inner.append_leaf(node_data)?;
+        let node_data = V::block_to_history_node(block, &self.network, roots)?;
+        let appended = self
+            .inner
+            .append_leaf(node_data)
+            .map_err(|inner| HistoryTreeError::InnerError { inner })?;
 
         let mut new_nodes = Vec::new();
         for entry_link in appended {
@@ -251,11 +266,12 @@ impl Version for zcash_history::V1 {
     /// Convert a Block into a V1::NodeData used in the MMR tree.
     ///
     /// Only the Sapling root in `roots` is used; the Orchard and Ironwood roots are ignored.
+    #[allow(clippy::unwrap_in_result)]
     fn block_to_history_node(
         block: Arc<Block>,
         network: &Network,
         roots: BlockCommitmentTreeRoots,
-    ) -> Self::NodeData {
+    ) -> Result<Self::NodeData, HistoryTreeError> {
         let sapling_root = roots.sapling;
         let height = block
             .coinbase_height()
@@ -263,7 +279,7 @@ impl Version for zcash_history::V1 {
         let network_upgrade = NetworkUpgrade::current(network, height);
         let branch_id = network_upgrade
             .branch_id()
-            .expect("must have branch ID for chain history network upgrades");
+            .ok_or(HistoryTreeError::MissingBranchId(network_upgrade))?;
         let block_hash = block.hash().0;
         let time: u32 = block
             .header
@@ -305,7 +321,7 @@ impl Version for zcash_history::V1 {
             NetworkUpgrade::ZFuture => {}
         };
 
-        zcash_history::NodeData {
+        Ok(zcash_history::NodeData {
             consensus_branch_id: branch_id.into(),
             subtree_commitment: block_hash,
             start_time: time,
@@ -318,7 +334,7 @@ impl Version for zcash_history::V1 {
             start_height: height.0 as u64,
             end_height: height.0 as u64,
             sapling_tx: sapling_tx_count,
-        }
+        })
     }
 }
 
@@ -330,16 +346,16 @@ impl Version for V2 {
         block: Arc<Block>,
         network: &Network,
         roots: BlockCommitmentTreeRoots,
-    ) -> Self::NodeData {
+    ) -> Result<Self::NodeData, HistoryTreeError> {
         let orchard_tx_count = block.orchard_transactions_count();
-        let node_data_v1 = V1::block_to_history_node(block, network, roots);
+        let node_data_v1 = V1::block_to_history_node(block, network, roots)?;
         let orchard_root: [u8; 32] = roots.orchard.into();
-        Self::NodeData {
+        Ok(Self::NodeData {
             v1: node_data_v1,
             start_orchard_root: orchard_root,
             end_orchard_root: orchard_root,
             orchard_tx: orchard_tx_count,
-        }
+        })
     }
 }
 
@@ -352,15 +368,15 @@ impl Version for V3 {
         block: Arc<Block>,
         network: &Network,
         roots: BlockCommitmentTreeRoots,
-    ) -> Self::NodeData {
+    ) -> Result<Self::NodeData, HistoryTreeError> {
         let ironwood_tx_count = block.ironwood_transactions_count();
-        let node_data_v2 = V2::block_to_history_node(block, network, roots);
+        let node_data_v2 = V2::block_to_history_node(block, network, roots)?;
         let ironwood_root: [u8; 32] = roots.ironwood.into();
-        Self::NodeData {
+        Ok(Self::NodeData {
             v2: node_data_v2,
             start_ironwood_root: ironwood_root,
             end_ironwood_root: ironwood_root,
             ironwood_tx: ironwood_tx_count,
-        }
+        })
     }
 }

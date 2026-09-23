@@ -229,8 +229,8 @@ impl TryFrom<ConsensusBranchId> for zcash_protocol::consensus::BranchId {
 /// do the uniqueness check in the unit tests.
 ///
 /// A network upgrade can have an activation height on a configured network before its branch ID
-/// is in this table (for example, the test-only `Nu7` entry below is absent from production
-/// builds). Chain history tree operations for blocks in such an upgrade return
+/// is in this table (for example, an entry that is only compiled into test builds). Chain history
+/// tree operations for blocks in such an upgrade return
 /// [`HistoryTreeError::MissingBranchId`](crate::history_tree::HistoryTreeError::MissingBranchId),
 /// so the block fails to commit instead of panicking.
 pub(crate) const CONSENSUS_BRANCH_IDS: &[(NetworkUpgrade, ConsensusBranchId)] = &[
